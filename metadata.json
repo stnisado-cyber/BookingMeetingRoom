@@ -1,0 +1,8 @@
+{
+  "name": "RuangKantor — Reservasi Ruang Meeting",
+  "description": "Website booking ruang meeting kantor dengan integrasi Google Calendar, jadwal timeline real-time, dan notifikasi otomatis untuk setiap reservasi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

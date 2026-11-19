@@ -452,7 +452,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   const blocker = isStartSlotBlocked(t);
                   return (
                     <option key={t} value={t} disabled={Boolean(blocker)}>
-                      {blocker ? `${t} — Sudah Dipesan` : t}
+                      {blocker ? `${t} — Booked` : t}
                     </option>
                   );
                 })}

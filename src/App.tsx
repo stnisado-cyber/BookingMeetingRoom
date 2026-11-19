@@ -560,12 +560,12 @@ export default function App() {
                       {activeNow ? (
                         <>
                           <Clock className="h-3.5 w-3.5" />
-                          Dipakai s/d {activeNow.endTime}
+                          Booked (s/d {activeNow.endTime})
                         </>
                       ) : (
                         <>
                           <CheckCircle2 className="h-3.5 w-3.5" />
-                          Tersedia
+                          Available
                         </>
                       )}
                     </span>

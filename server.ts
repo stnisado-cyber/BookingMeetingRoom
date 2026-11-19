@@ -285,26 +285,42 @@ const DEFAULT_ROOMS: DbRoomRow[] = [
 
 async function ensureSupabaseSeeded(): Promise<void> {
   try {
-    // Ensure the 2 requested rooms exist with up-to-date names & capacities
-    const { error: upsertErr } = await supabase
+    const { data: currentRooms, error: checkErr } = await supabase
       .from('rooms')
-      .upsert(DEFAULT_ROOMS, { onConflict: 'id' });
+      .select('id, capacity, floor');
 
-    if (upsertErr) {
-      console.warn('Supabase rooms upsert warning:', upsertErr.message);
+    if (checkErr) {
+      console.warn('Supabase rooms check warning:', checkErr.message);
       return;
     }
 
-    // Migrate any legacy bookings from room-utama -> room-besar, then remove room-utama
-    await supabase
-      .from('bookings')
-      .update({ room_id: 'room-besar' })
-      .eq('room_id', 'room-utama');
+    const hasBesar = currentRooms?.some(
+      (r) => r.id === 'room-besar' && r.capacity === 11 && r.floor === ''
+    );
+    const hasKecil = currentRooms?.some(
+      (r) => r.id === 'room-kecil' && r.capacity === 3 && r.floor === ''
+    );
+    const hasLegacy = currentRooms?.some((r) => r.id === 'room-utama');
 
-    await supabase
-      .from('rooms')
-      .delete()
-      .eq('id', 'room-utama');
+    if (!hasBesar || !hasKecil || hasLegacy) {
+      const { error: upsertErr } = await supabase
+        .from('rooms')
+        .upsert(DEFAULT_ROOMS, { onConflict: 'id' });
+
+      if (upsertErr) {
+        console.warn('Supabase rooms upsert warning:', upsertErr.message);
+        return;
+      }
+
+      if (hasLegacy) {
+        await supabase
+          .from('bookings')
+          .update({ room_id: 'room-besar' })
+          .eq('room_id', 'room-utama');
+
+        await supabase.from('rooms').delete().eq('id', 'room-utama');
+      }
+    }
 
     const { data: existingBookings } = await supabase
       .from('bookings')
@@ -633,8 +649,6 @@ setInterval(() => {
 }, 15_000);
 
 async function startServer(): Promise<void> {
-  await ensureSupabaseSeeded();
-
   const app = express();
   app.use(express.json());
 
@@ -1132,12 +1146,20 @@ async function startServer(): Promise<void> {
   });
 
   if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
+    const vitePromise = import('vite').then(({ createServer: createViteServer }) =>
+      createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      })
+    );
+    app.use(async (req, res, next) => {
+      try {
+        const vite = await vitePromise;
+        vite.middlewares(req, res, next);
+      } catch (err) {
+        next(err);
+      }
     });
-    app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
@@ -1154,6 +1176,7 @@ async function startServer(): Promise<void> {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`RuangKantor server running on http://0.0.0.0:${PORT}`);
+    void ensureSupabaseSeeded();
   });
 }
 

@@ -71,11 +71,11 @@ export const SlotGrid: React.FC<SlotGridProps> = ({
         <div className="flex items-center gap-5 text-xs text-slate-600">
           <span className="flex items-center gap-2">
             <span className="inline-block h-3 w-3 rounded-sm border border-slate-300 bg-white" />
-            <span>Tersedia</span>
+            <span>Available</span>
           </span>
           <span className="flex items-center gap-2">
             <span className="inline-block h-3 w-3 rounded-sm border border-[#0E347C]/30 bg-[#0E347C]/10" />
-            <span>Terkunci</span>
+            <span>Booked</span>
           </span>
         </div>
       </div>
@@ -98,7 +98,7 @@ export const SlotGrid: React.FC<SlotGridProps> = ({
                 key={hour}
                 type="button"
                 onClick={() => onSelectBooking(blocker)}
-                title={`Terkunci (${blocker.startTime}–${blocker.endTime}) oleh ${blocker.organizerName}. Klik untuk melihat atau mengubah.`}
+                title={`Booked (${blocker.startTime}–${blocker.endTime}) oleh ${blocker.organizerName}. Klik untuk melihat atau mengubah.`}
                 className={`flex min-h-[96px] flex-col justify-between rounded-lg border p-3.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-[#0E347C] ${
                   isRunningNow
                     ? 'border-[#E31A8D] bg-[#E31A8D]/5 hover:bg-[#E31A8D]/10'
@@ -115,7 +115,7 @@ export const SlotGrid: React.FC<SlotGridProps> = ({
                     }`}
                   >
                     <Lock className="h-3 w-3 shrink-0" />
-                    {isRunningNow ? 'Berlangsung' : 'Terkunci'}
+                    Booked
                   </span>
                 </div>
 
@@ -148,7 +148,7 @@ export const SlotGrid: React.FC<SlotGridProps> = ({
                 </span>
                 <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700">
                   <Clock className="h-3 w-3 shrink-0" />
-                  {isRunningNow ? 'Kosong Sekarang' : 'Tersedia'}
+                  Available
                 </span>
               </div>
 

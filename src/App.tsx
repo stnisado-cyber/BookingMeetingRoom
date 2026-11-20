@@ -108,6 +108,23 @@ interface DbNotificationRow {
   created_at: string;
 }
 
+function CompanyBrandLogo() {
+  return (
+    <div className="flex shrink-0 items-center gap-2.5">
+      <div className="flex h-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white px-2 py-1 shadow-xs">
+        <img
+          src="/logo-pla.png"
+          alt="Logo PT Permata Lintas Abadi"
+          className="h-full w-auto max-w-[120px] object-contain"
+        />
+      </div>
+      <span className="whitespace-nowrap font-display text-sm font-bold tracking-tight text-white sm:text-base">
+        PT Permata Lintas Abadi
+      </span>
+    </div>
+  );
+}
+
 function mapRoomRow(row: DbRoomRow): Room {
   return {
     id: row.id,
@@ -214,10 +231,10 @@ function downloadBookingIcs(booking: Booking, room?: Room): void {
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//RuangKantor//Meeting Room Booking//ID',
+    'PRODID:-//PT Permata Lintas Abadi//Meeting Room Booking//ID',
     'CALSCALE:GREGORIAN',
     'BEGIN:VEVENT',
-    `UID:${booking.id}@ruangkantor.local`,
+    `UID:${booking.id}@permatalintasabadi.local`,
     `DTSTAMP:${dtStamp}`,
     `DTSTART:${dtStart}`,
     `DTEND:${dtEnd}`,
@@ -384,7 +401,6 @@ export default function App() {
     void fetchCoreData();
   }, [fetchCoreData]);
 
-  // Sinkronisasi real-time perubahan tabel bookings dari Supabase
   useEffect(() => {
     const channel = supabase
       .channel('public:bookings-realtime')
@@ -732,21 +748,21 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-30 border-b border-[#0E347C] bg-[#0E347C] text-white">
-        <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between gap-8 px-4 sm:px-6">
+        <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between gap-6 px-4 sm:px-6">
           <a
             href="#jadwal"
             onClick={(e) => {
               e.preventDefault();
               scrollToSection('jadwal');
             }}
-            className="whitespace-nowrap shrink-0 font-display text-lg font-bold tracking-tight text-white"
+            className="flex shrink-0 items-center text-white"
           >
-            RuangKantor
+            <CompanyBrandLogo />
           </a>
 
           <nav
             aria-label="Navigasi utama"
-            className="hidden items-center gap-7 text-sm font-medium text-white/85 md:flex"
+            className="hidden items-center gap-6 text-sm font-medium text-white/85 md:flex"
           >
             <button
               type="button"
@@ -778,7 +794,7 @@ export default function App() {
             </button>
           </nav>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex shrink-0 items-center gap-3">
             <button
               type="button"
               onClick={() => setIsNotifDrawerOpen(true)}
@@ -1093,7 +1109,7 @@ export default function App() {
                             )}
                           </div>
 
-                          <div className="flex shrink-0 items-center gap-1.5">
+                          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                             <a
                               href={gcalUrl}
                               target="_blank"
@@ -1125,9 +1141,10 @@ export default function App() {
                               type="button"
                               onClick={() => setBookingToCancel(booking)}
                               aria-label={`Batalkan ${booking.title}`}
-                              className="rounded-lg border border-red-200 bg-white p-1.5 text-red-600 hover:bg-red-50"
+                              className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50/60 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
+                              <span>Batalkan</span>
                             </button>
                           </div>
                         </div>

@@ -20,12 +20,145 @@ import type {
   NotificationSettings,
   Room,
 } from './types/booking';
+import { supabase } from './lib/supabaseClient';
 import { buildGoogleCalendarTemplateUrl } from './lib/calendarLinks';
 import { SlotGrid } from './components/SlotGrid';
 import { MiniCalendarCard } from './components/MiniCalendarCard';
 import { NotificationsDrawer } from './components/NotificationsDrawer';
 import { BookingModal, type BookingFormValues } from './components/BookingModal';
 import { ConfirmationModal } from './components/ConfirmationModal';
+
+const DEFAULT_ROOMS: Room[] = [
+  {
+    id: 'room-besar',
+    code: 'R-01',
+    name: 'Ruang Meeting Besar',
+    floor: '',
+    capacity: 11,
+    amenities: [
+      'Layar Presentasi 4K',
+      'Kamera Konferensi',
+      'Papan Tulis Kaca',
+      'HDMI & USB-C Dock',
+    ],
+    description:
+      'Ruang meeting berkapasitas 11 orang untuk rapat tim, presentasi klien, maupun diskusi lintas divisi.',
+  },
+  {
+    id: 'room-kecil',
+    code: 'R-02',
+    name: 'Ruang Meeting Kecil',
+    floor: '',
+    capacity: 3,
+    amenities: ['Monitor Presentasi', 'Papan Tulis', 'HDMI Dock'],
+    description:
+      'Ruang meeting ringkas berkapasitas 3 orang untuk diskusi cepat, 1-on-1, atau panggilan daring.',
+  },
+];
+
+const DEFAULT_SETTINGS: NotificationSettings = {
+  reminderMinutesBefore: 15,
+  desktopAlerts: false,
+  notifyOnCancellation: true,
+};
+
+interface DbRoomRow {
+  id: string;
+  code: string;
+  name: string;
+  floor: string | null;
+  capacity: number;
+  amenities: string[] | null;
+  description: string | null;
+}
+
+interface DbBookingRow {
+  id: string;
+  room_id: string;
+  title: string;
+  description: string | null;
+  date: string;
+  start_time: string;
+  end_time: string;
+  organizer_name: string;
+  organizer_email: string;
+  attendees: string[] | null;
+  status: string;
+  reminder_minutes: number | null;
+  reminder_sent: boolean | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface DbNotificationRow {
+  id: string;
+  type: NotificationItem['type'];
+  title: string;
+  message: string;
+  booking_id: string | null;
+  room_name: string | null;
+  meeting_date: string | null;
+  meeting_time: string | null;
+  read: boolean;
+  channels: {
+    inApp?: boolean;
+    attendeeCount?: number;
+    reminderScheduledMinutes?: number;
+  } | null;
+  created_at: string;
+}
+
+function mapRoomRow(row: DbRoomRow): Room {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    floor: row.floor || '',
+    capacity: row.capacity,
+    amenities: Array.isArray(row.amenities) ? row.amenities : [],
+    description: row.description || '',
+  };
+}
+
+function mapBookingRow(row: DbBookingRow): Booking {
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    title: row.title,
+    description: row.description || '',
+    date: row.date,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    organizerName: row.organizer_name,
+    organizerEmail: row.organizer_email,
+    attendees: Array.isArray(row.attendees) ? row.attendees : [],
+    status: row.status === 'cancelled' ? 'cancelled' : 'confirmed',
+    reminderMinutes: row.reminder_minutes ?? 15,
+    reminderSent: Boolean(row.reminder_sent),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapNotificationRow(row: DbNotificationRow): NotificationItem {
+  return {
+    id: row.id,
+    type: row.type,
+    title: row.title,
+    message: row.message,
+    bookingId: row.booking_id ?? undefined,
+    roomName: row.room_name ?? undefined,
+    meetingDate: row.meeting_date ?? undefined,
+    meetingTime: row.meeting_time ?? undefined,
+    read: Boolean(row.read),
+    createdAt: row.created_at,
+    channels: {
+      inApp: row.channels?.inApp ?? true,
+      attendeeCount: row.channels?.attendeeCount ?? 0,
+      reminderScheduledMinutes: row.channels?.reminderScheduledMinutes,
+    },
+  };
+}
 
 function formatLocalDateString(dt: Date): string {
   const y = dt.getFullYear();
@@ -57,6 +190,58 @@ function toMinutes(hhmm: string): number {
   return h * 60 + m;
 }
 
+function formatIcsTimestamp(dateStr: string, timeStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const [hh, mm] = timeStr.split(':').map(Number);
+  const dt = new Date(y, m - 1, d, hh, mm, 0);
+  return dt.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function escapeIcsText(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;');
+}
+
+function downloadBookingIcs(booking: Booking, room?: Room): void {
+  const location = room ? `${room.name} (${room.code})` : 'Ruang Meeting Kantor';
+  const dtStart = formatIcsTimestamp(booking.date, booking.startTime);
+  const dtEnd = formatIcsTimestamp(booking.date, booking.endTime);
+  const dtStamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//RuangKantor//Meeting Room Booking//ID',
+    'CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT',
+    `UID:${booking.id}@ruangkantor.local`,
+    `DTSTAMP:${dtStamp}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${escapeIcsText(`[${room?.code || 'R-01'}] ${booking.title}`)}`,
+    `DESCRIPTION:${escapeIcsText(booking.description || `Reservasi oleh ${booking.organizerName}`)}`,
+    `LOCATION:${escapeIcsText(location)}`,
+    `ORGANIZER;CN=${escapeIcsText(booking.organizerName)}:mailto:${booking.organizerEmail}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ];
+
+  const blob = new Blob([lines.join('\r\n')], {
+    type: 'text/calendar;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `reservasi-${booking.id}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export default function App() {
   const [nowTick, setNowTick] = useState<Date>(() => new Date());
   const [selectedDate, setSelectedDate] = useState<string>(() =>
@@ -64,27 +249,19 @@ export default function App() {
   );
   const [selectedRoomId, setSelectedRoomId] = useState<string>('room-besar');
 
-  // Simple pre-filled identity (no login required)
   const [userName, setUserName] = useState('Siti Anisah');
   const [userEmail, setUserEmail] = useState('stnisado@gmail.com');
 
-  // Core data from Supabase via backend
-  const [rooms, setRooms] = useState<Room[]>([]);
+  const [rooms, setRooms] = useState<Room[]>(DEFAULT_ROOMS);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [settings, setSettings] = useState<NotificationSettings>({
-    reminderMinutesBefore: 15,
-    desktopAlerts: false,
-    notifyOnCancellation: true,
-  });
+  const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
   const [isLoadingData, setIsLoadingData] = useState(true);
 
-  // Agenda list view filter
   const [agendaScope, setAgendaScope] = useState<'date' | 'upcoming'>('date');
   const [agendaSearch, setAgendaSearch] = useState('');
 
-  // Drawer & Modals
   const [isNotifDrawerOpen, setIsNotifDrawerOpen] = useState(false);
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [modalInitialRoomId, setModalInitialRoomId] = useState<string | undefined>();
@@ -97,7 +274,6 @@ export default function App() {
   const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null);
   const [isProcessingCancel, setIsProcessingCancel] = useState(false);
 
-  // Real-time Toast
   const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
   const [browserPermission, setBrowserPermission] = useState<
     NotificationPermission | 'unsupported'
@@ -107,7 +283,6 @@ export default function App() {
       : 'unsupported'
   );
 
-  // 1-second real-time clock tick
   useEffect(() => {
     const timer = setInterval(() => {
       setNowTick(new Date());
@@ -115,76 +290,117 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  const pushLocalNotification = useCallback(
+    (item: Omit<NotificationItem, 'id' | 'createdAt' | 'read'>) => {
+      const mapped: NotificationItem = {
+        ...item,
+        id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        createdAt: new Date().toISOString(),
+        read: false,
+      };
+      setNotifications((prev) => [mapped, ...prev].slice(0, 100));
+      setUnreadCount((c) => c + 1);
+      setToastNotification(mapped);
+
+      void supabase.from('notifications').insert([
+        {
+          id: mapped.id,
+          type: mapped.type,
+          title: mapped.title,
+          message: mapped.message,
+          booking_id: mapped.bookingId ?? null,
+          room_name: mapped.roomName ?? null,
+          meeting_date: mapped.meetingDate ?? null,
+          meeting_time: mapped.meetingTime ?? null,
+          read: false,
+          channels: mapped.channels,
+          created_at: mapped.createdAt,
+        },
+      ]);
+
+      if (
+        typeof window !== 'undefined' &&
+        'Notification' in window &&
+        Notification.permission === 'granted' &&
+        settings.desktopAlerts
+      ) {
+        new Notification(mapped.title, { body: mapped.message });
+      }
+    },
+    [settings.desktopAlerts]
+  );
+
   const fetchCoreData = useCallback(async () => {
     try {
-      const [roomsRes, bookingsRes, notifRes] = await Promise.all([
-        fetch('/api/rooms'),
-        fetch('/api/bookings'),
-        fetch('/api/notifications'),
+      const [roomsRes, bookingsRes, notifRes, settingsRes] = await Promise.all([
+        supabase.from('rooms').select('*').order('code'),
+        supabase
+          .from('bookings')
+          .select('*')
+          .order('date', { ascending: true })
+          .order('start_time', { ascending: true }),
+        supabase
+          .from('notifications')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(100),
+        supabase.from('notification_settings').select('*').eq('id', 1).maybeSingle(),
       ]);
-      if (roomsRes.ok) {
-        const d = await roomsRes.json();
-        const loadedRooms: Room[] = d.rooms || [];
+
+      if (!roomsRes.error && roomsRes.data && roomsRes.data.length > 0) {
+        const loadedRooms = (roomsRes.data as DbRoomRow[]).map(mapRoomRow);
         setRooms(loadedRooms);
-        if (loadedRooms.length > 0 && !loadedRooms.some((r) => r.id === selectedRoomId)) {
-          setSelectedRoomId(loadedRooms[0].id);
-        }
+      } else {
+        setRooms(DEFAULT_ROOMS);
       }
-      if (bookingsRes.ok) {
-        const d = await bookingsRes.json();
-        setBookings(d.bookings || []);
+
+      if (!bookingsRes.error && bookingsRes.data) {
+        setBookings((bookingsRes.data as DbBookingRow[]).map(mapBookingRow));
       }
-      if (notifRes.ok) {
-        const d = await notifRes.json();
-        setNotifications(d.notifications || []);
-        setUnreadCount(d.unreadCount || 0);
-        if (d.settings) setSettings(d.settings);
+
+      if (!notifRes.error && notifRes.data) {
+        const mappedNotifs = (notifRes.data as DbNotificationRow[]).map(mapNotificationRow);
+        setNotifications(mappedNotifs);
+        setUnreadCount(mappedNotifs.filter((n) => !n.read).length);
+      }
+
+      if (!settingsRes.error && settingsRes.data) {
+        setSettings({
+          reminderMinutesBefore:
+            settingsRes.data.reminder_minutes_before ?? DEFAULT_SETTINGS.reminderMinutesBefore,
+          desktopAlerts: Boolean(settingsRes.data.desktop_alerts),
+          notifyOnCancellation:
+            settingsRes.data.notify_on_cancellation ?? DEFAULT_SETTINGS.notifyOnCancellation,
+        });
       }
     } catch (err) {
-      console.error('Failed to load workspace data:', err);
+      console.error('Failed to load workspace data from Supabase:', err);
     } finally {
       setIsLoadingData(false);
     }
-  }, [selectedRoomId]);
+  }, []);
 
   useEffect(() => {
-    fetchCoreData();
+    void fetchCoreData();
   }, [fetchCoreData]);
 
-  // Real-time SSE listener
+  // Sinkronisasi real-time perubahan tabel bookings dari Supabase
   useEffect(() => {
-    const es = new EventSource('/api/notifications/stream');
-    es.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'bookings_sync' && Array.isArray(data.bookings)) {
-          setBookings(data.bookings);
-        } else if (data.type === 'notification' && data.notification) {
-          const item = data.notification as NotificationItem;
-          setNotifications((prev) => {
-            if (prev.some((n) => n.id === item.id)) return prev;
-            return [item, ...prev].slice(0, 100);
-          });
-          setUnreadCount((c) => c + 1);
-          setToastNotification(item);
-
-          if (
-            typeof window !== 'undefined' &&
-            'Notification' in window &&
-            Notification.permission === 'granted' &&
-            settings.desktopAlerts
-          ) {
-            new Notification(item.title, { body: item.message });
-          }
+    const channel = supabase
+      .channel('public:bookings-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'bookings' },
+        () => {
+          void fetchCoreData();
         }
-      } catch {
-        // Ignore keepalive frames
-      }
-    };
+      )
+      .subscribe();
+
     return () => {
-      es.close();
+      void supabase.removeChannel(channel);
     };
-  }, [settings.desktopAlerts]);
+  }, [fetchCoreData]);
 
   useEffect(() => {
     if (!toastNotification) return;
@@ -207,26 +423,154 @@ export default function App() {
     setIsBookingModalOpen(true);
   };
 
+  const findConflict = (
+    roomId: string,
+    date: string,
+    startTime: string,
+    endTime: string,
+    excludeId?: string
+  ): Booking | undefined => {
+    const newStart = toMinutes(startTime);
+    const newEnd = toMinutes(endTime);
+    return bookings.find((b) => {
+      if (b.status !== 'confirmed') return false;
+      if (excludeId && b.id === excludeId) return false;
+      if (b.roomId !== roomId || b.date !== date) return false;
+      const bStart = toMinutes(b.startTime);
+      const bEnd = toMinutes(b.endTime);
+      return newStart < bEnd && newEnd > bStart;
+    });
+  };
+
   const handleBookingModalSubmit = async (values: BookingFormValues) => {
     setIsSubmittingBooking(true);
     setBookingServerError(null);
     try {
-      const url = editingBooking ? `/api/bookings/${editingBooking.id}` : '/api/bookings';
-      const method = editingBooking ? 'PATCH' : 'POST';
+      const targetRoomId = values.roomId || rooms[0]?.id || 'room-besar';
+      const room = rooms.find((r) => r.id === targetRoomId) || rooms[0];
 
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        setBookingServerError(data.error || 'Gagal menyimpan reservasi.');
+      if (!values.title?.trim() || !values.date || !values.startTime || !values.endTime) {
+        setBookingServerError('Data reservasi tidak lengkap (judul, tanggal, dan jam wajib diisi).');
         return;
       }
 
-      setSelectedRoomId(values.roomId);
+      if (toMinutes(values.endTime) <= toMinutes(values.startTime)) {
+        setBookingServerError('Jam selesai harus lebih besar dari jam mulai.');
+        return;
+      }
+
+      const conflict = findConflict(
+        targetRoomId,
+        values.date,
+        values.startTime,
+        values.endTime,
+        editingBooking?.id
+      );
+      if (conflict) {
+        setBookingServerError(
+          `Bentrok jadwal: ${room?.name || targetRoomId} sudah dipesan oleh ${conflict.organizerName} (${conflict.startTime}–${conflict.endTime}) untuk "${conflict.title}".`
+        );
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const attendees = Array.isArray(values.attendees)
+        ? values.attendees.map((e) => e.trim()).filter(Boolean)
+        : [];
+      const reminderMinutes =
+        typeof values.reminderMinutes === 'number' && values.reminderMinutes > 0
+          ? values.reminderMinutes
+          : settings.reminderMinutesBefore;
+
+      if (editingBooking) {
+        const scheduleChanged =
+          targetRoomId !== editingBooking.roomId ||
+          values.date !== editingBooking.date ||
+          values.startTime !== editingBooking.startTime ||
+          values.endTime !== editingBooking.endTime;
+
+        const { error } = await supabase
+          .from('bookings')
+          .update({
+            room_id: targetRoomId,
+            title: values.title.trim(),
+            description: (values.description || '').trim(),
+            date: values.date,
+            start_time: values.startTime,
+            end_time: values.endTime,
+            organizer_name: (values.organizerName || userName || 'Pengguna Kantor').trim(),
+            organizer_email: (values.organizerEmail || userEmail || 'pengguna@perusahaan.id').trim(),
+            attendees,
+            reminder_minutes: reminderMinutes,
+            reminder_sent: scheduleChanged ? false : editingBooking.reminderSent,
+            updated_at: nowIso,
+          })
+          .eq('id', editingBooking.id);
+
+        if (error) {
+          setBookingServerError(`Gagal memperbarui reservasi: ${error.message}`);
+          return;
+        }
+
+        pushLocalNotification({
+          type: 'booking_updated',
+          title: `Jadwal Diperbarui: ${values.title.trim()}`,
+          message: `${room?.name || targetRoomId} (${values.date}, ${values.startTime}–${values.endTime}) berhasil diperbarui.`,
+          bookingId: editingBooking.id,
+          roomName: room?.name,
+          meetingDate: values.date,
+          meetingTime: `${values.startTime}–${values.endTime}`,
+          channels: {
+            inApp: true,
+            attendeeCount: attendees.length,
+            reminderScheduledMinutes: reminderMinutes,
+          },
+        });
+      } else {
+        const newId = `bk-${Math.random().toString(36).slice(2, 10)}`;
+        const organizerNameVal = (values.organizerName || userName || 'Pengguna Kantor').trim();
+        const { error } = await supabase.from('bookings').insert([
+          {
+            id: newId,
+            room_id: targetRoomId,
+            title: values.title.trim(),
+            description: (values.description || '').trim(),
+            date: values.date,
+            start_time: values.startTime,
+            end_time: values.endTime,
+            organizer_name: organizerNameVal,
+            organizer_email: (values.organizerEmail || userEmail || 'pengguna@perusahaan.id').trim(),
+            attendees,
+            status: 'confirmed',
+            reminder_minutes: reminderMinutes,
+            reminder_sent: false,
+            created_at: nowIso,
+            updated_at: nowIso,
+          },
+        ]);
+
+        if (error) {
+          setBookingServerError(`Gagal menyimpan ke Supabase: ${error.message}`);
+          return;
+        }
+
+        pushLocalNotification({
+          type: 'booking_created',
+          title: `Reservasi Baru: ${values.title.trim()}`,
+          message: `${room?.name || targetRoomId} (${room?.code || 'R-01'}) dipesan oleh ${organizerNameVal} pada ${values.date} pukul ${values.startTime}–${values.endTime}.`,
+          bookingId: newId,
+          roomName: room?.name,
+          meetingDate: values.date,
+          meetingTime: `${values.startTime}–${values.endTime}`,
+          channels: {
+            inApp: true,
+            attendeeCount: attendees.length,
+            reminderScheduledMinutes: reminderMinutes,
+          },
+        });
+      }
+
+      setSelectedRoomId(targetRoomId);
       await fetchCoreData();
       setIsBookingModalOpen(false);
       setEditingBooking(null);
@@ -243,10 +587,28 @@ export default function App() {
     if (!bookingToCancel) return;
     setIsProcessingCancel(true);
     try {
-      const res = await fetch(`/api/bookings/${bookingToCancel.id}`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
+      const { error } = await supabase
+        .from('bookings')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', bookingToCancel.id);
+
+      if (!error) {
+        const room = rooms.find((r) => r.id === bookingToCancel.roomId);
+        if (settings.notifyOnCancellation) {
+          pushLocalNotification({
+            type: 'booking_cancelled',
+            title: `Reservasi Dibatalkan: ${bookingToCancel.title}`,
+            message: `Slot ${room ? `${room.name} (${room.code})` : 'ruang meeting'} pada ${bookingToCancel.date} (${bookingToCancel.startTime}–${bookingToCancel.endTime}) kini tersedia kembali.`,
+            bookingId: bookingToCancel.id,
+            roomName: room?.name,
+            meetingDate: bookingToCancel.date,
+            meetingTime: `${bookingToCancel.startTime}–${bookingToCancel.endTime}`,
+            channels: {
+              inApp: true,
+              attendeeCount: bookingToCancel.attendees.length,
+            },
+          });
+        }
         await fetchCoreData();
       }
     } catch (err) {
@@ -258,25 +620,34 @@ export default function App() {
   };
 
   const handleMarkNotificationRead = async (id?: string, all?: boolean) => {
-    const res = await fetch('/api/notifications/mark-read', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, all }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setNotifications(data.notifications);
-      setUnreadCount(data.unreadCount);
+    if (all) {
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+      setUnreadCount(0);
+      await supabase.from('notifications').update({ read: true }).eq('read', false);
+    } else if (id) {
+      setNotifications((prev) => {
+        const next = prev.map((n) => (n.id === id ? { ...n, read: true } : n));
+        setUnreadCount(next.filter((n) => !n.read).length);
+        return next;
+      });
+      await supabase.from('notifications').update({ read: true }).eq('id', id);
     }
   };
 
   const handleUpdateNotificationSettings = async (patch: Partial<NotificationSettings>) => {
-    setSettings((prev) => ({ ...prev, ...patch }));
-    await fetch('/api/notifications/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
+    const merged = { ...settings, ...patch };
+    setSettings(merged);
+    await supabase.from('notification_settings').upsert(
+      [
+        {
+          id: 1,
+          reminder_minutes_before: merged.reminderMinutesBefore,
+          desktop_alerts: merged.desktopAlerts,
+          notify_on_cancellation: merged.notifyOnCancellation,
+        },
+      ],
+      { onConflict: 'id' }
+    );
   };
 
   const handleRequestBrowserPermission = async () => {
@@ -289,7 +660,16 @@ export default function App() {
   };
 
   const handleSendTestNotification = async () => {
-    await fetch('/api/notifications/test', { method: 'POST' });
+    pushLocalNotification({
+      type: 'system_test',
+      title: 'Uji Notifikasi Real-Time Berhasil',
+      message: `Sistem pengingat aktif (H-${settings.reminderMinutesBefore} menit sebelum rapat).`,
+      channels: {
+        inApp: true,
+        attendeeCount: 1,
+        reminderScheduledMinutes: settings.reminderMinutesBefore,
+      },
+    });
   };
 
   const scrollToSection = (id: string) => {
@@ -351,10 +731,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
-      {/* Strict 3-Zone Top Bar in Brand Navy #0E347C */}
       <header className="sticky top-0 z-30 border-b border-[#0E347C] bg-[#0E347C] text-white">
         <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between gap-8 px-4 sm:px-6">
-          {/* Zone 1: Brand Title */}
           <a
             href="#jadwal"
             onClick={(e) => {
@@ -366,7 +744,6 @@ export default function App() {
             RuangKantor
           </a>
 
-          {/* Zone 2: Concise Single-Line Nav Links */}
           <nav
             aria-label="Navigasi utama"
             className="hidden items-center gap-7 text-sm font-medium text-white/85 md:flex"
@@ -401,7 +778,6 @@ export default function App() {
             </button>
           </nav>
 
-          {/* Zone 3: Single Primary Action in Brand Magenta #E31A8D */}
           <div className="flex items-center gap-3 shrink-0">
             <button
               type="button"
@@ -429,7 +805,6 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1200px] space-y-6 px-4 py-6 sm:px-6">
-        {/* Real-Time Toast Banner */}
         {toastNotification && (
           <div
             role="status"
@@ -459,7 +834,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Top Bar: 2 Meeting Rooms Switcher + Real-Time Clock & Date Picker */}
         <section
           aria-label="Pilihan ruang meeting dan waktu"
           className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 sm:p-6"
@@ -475,7 +849,6 @@ export default function App() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-5">
-              {/* Live Clock */}
               <div className="lg:border-r lg:border-slate-200 lg:pr-5">
                 <div className="font-mono text-2xl font-bold tracking-tight text-[#0E347C] tabular-nums">
                   {liveClockString}
@@ -483,7 +856,6 @@ export default function App() {
                 <div className="text-xs text-slate-500">{liveDateString}</div>
               </div>
 
-              {/* Date Switcher */}
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
@@ -521,7 +893,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* 2 Room Selector Cards (No Photos, No Lantai 1) */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {rooms.map((room) => {
               const isSelected = room.id === selectedRoom?.id;
@@ -597,7 +968,6 @@ export default function App() {
           </div>
         ) : (
           <>
-            {/* Primary Slot Grid (08:00 - 19:00) for Selected Room */}
             <SlotGrid
               room={selectedRoom}
               bookings={bookings}
@@ -609,9 +979,7 @@ export default function App() {
               onSelectBooking={(booking) => openEditBookingModal(booking)}
             />
 
-            {/* Two-Column Lower Section: Agenda List + Mini Calendar & Quick Identity */}
             <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[1.45fr_1fr]">
-              {/* Left: Simple Agenda List with Calendar Export & Edit/Cancel */}
               <section
                 id="agenda"
                 aria-labelledby="agenda-heading"
@@ -736,14 +1104,15 @@ export default function App() {
                               Google Cal
                               <ExternalLink className="h-3 w-3" />
                             </a>
-                            <a
-                              href={`/api/bookings/${booking.id}/ics`}
+                            <button
+                              type="button"
+                              onClick={() => downloadBookingIcs(booking, room)}
                               title="Unduh file .ics"
                               className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                             >
                               <Download className="h-3.5 w-3.5" />
                               .ics
-                            </a>
+                            </button>
                             <button
                               type="button"
                               onClick={() => openEditBookingModal(booking)}
@@ -768,7 +1137,6 @@ export default function App() {
                 )}
               </section>
 
-              {/* Right: Mini Calendar + Quick Identity */}
               <div className="space-y-6">
                 <MiniCalendarCard
                   selectedDate={selectedDate}

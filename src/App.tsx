@@ -913,12 +913,6 @@ export default function App() {
             {rooms.map((room) => {
               const isSelected = room.id === selectedRoom?.id;
               const activeNow = getRoomActiveBookingNow(room.id);
-              const dayCount = bookings.filter(
-                (b) =>
-                  b.roomId === room.id &&
-                  b.date === selectedDate &&
-                  b.status === 'confirmed'
-              ).length;
 
               return (
                 <button
@@ -958,15 +952,11 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 tabular-nums">
-                    <span className="inline-flex items-center gap-1 font-medium text-slate-800">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-600 tabular-nums">
+                    <span className="inline-flex items-center gap-1.5 font-medium text-slate-800">
                       <Users className="h-3.5 w-3.5 text-[#0E347C]" />
                       Kapasitas {room.capacity} orang
                     </span>
-                    <span aria-hidden="true">·</span>
-                    <span>{room.amenities.slice(0, 2).join(' · ')}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{dayCount} jadwal pada tanggal ini</span>
                   </div>
                 </button>
               );
